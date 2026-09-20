@@ -1,6 +1,6 @@
 # Distributed KV Store
 
-A simple distributed key-value store built with Java and Spring Boot, designed for **interview preparation**. It demonstrates core distributed systems concepts clearly and concisely, without unnecessary complexity.
+A simple distributed key-value store built with Java and Spring Boot. It demonstrates core distributed systems concepts clearly and concisely, without unnecessary complexity.
 
 ## Architecture Overview
 
