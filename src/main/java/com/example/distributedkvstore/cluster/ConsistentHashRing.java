@@ -15,11 +15,14 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * ConsistentHashRing — maps data keys to cluster nodes using consistent hashing
  * with virtual nodes.
  *
- * <p>Each physical node occupies {@link #virtualNodeCount} positions on a circular
- * hash space (0 … 2^64 - 1). When routing a key, the ring finds the first virtual
+ * <p>
+ * Each physical node occupies {@link #virtualNodeCount} positions on a circular
+ * hash space (0 … 2^64 - 1). When routing a key, the ring finds the first
+ * virtual
  * node whose hash is ≥ the key's hash — wrapping around if necessary.
  *
- * <p>Virtual nodes ensure even data distribution and minimise data movement when
+ * <p>
+ * Virtual nodes ensure even data distribution and minimise data movement when
  * nodes join or leave the cluster.
  */
 @Component
@@ -45,7 +48,8 @@ public class ConsistentHashRing {
     // -------------------------------------------------------------------------
 
     /**
-     * Adds a node to the ring by inserting {@link #virtualNodeCount} virtual points.
+     * Adds a node to the ring by inserting {@link #virtualNodeCount} virtual
+     * points.
      *
      * @param node the node to add
      */
@@ -91,15 +95,18 @@ public class ConsistentHashRing {
      * Returns the top-{@code n} distinct, alive nodes responsible for a key —
      * the "preference list" used by the quorum coordinator.
      *
-     * <p>Walks the ring clockwise from the key's hash position, collecting
+     * <p>
+     * Walks the ring clockwise from the key's hash position, collecting
      * distinct physical nodes, skipping dead ones.
      *
      * @param key the data key
-     * @param n   desired number of nodes (may be fewer if the cluster is small or unhealthy)
+     * @param n   desired number of nodes (may be fewer if the cluster is small or
+     *            unhealthy)
      * @return ordered list of responsible nodes (primary first)
      */
     public List<Node> getPreferenceList(String key, int n) {
-        if (ring.isEmpty()) return Collections.emptyList();
+        if (ring.isEmpty())
+            return Collections.emptyList();
 
         long keyHash = hash(key);
         List<Node> result = new ArrayList<>();
@@ -108,7 +115,8 @@ public class ConsistentHashRing {
         // Walk clockwise from keyHash, wrapping around once
         Iterable<Node> candidates = () -> new RingIterator(keyHash);
         for (Node node : candidates) {
-            if (result.size() >= n) break;
+            if (result.size() >= n)
+                break;
             if (node.isAlive() && seen.add(node.getId())) {
                 result.add(node);
             }
@@ -117,7 +125,9 @@ public class ConsistentHashRing {
     }
 
     /** Returns all physical nodes registered in the ring. */
-    public List<Node> allNodes() { return Collections.unmodifiableList(nodes); }
+    public List<Node> allNodes() {
+        return Collections.unmodifiableList(nodes);
+    }
 
     /** Returns {@code true} if a node with the given ID is already in the ring. */
     public boolean containsNode(String nodeId) {
@@ -125,7 +135,9 @@ public class ConsistentHashRing {
     }
 
     /** Returns the number of virtual points currently in the ring. */
-    public int ringSize() { return ring.size(); }
+    public int ringSize() {
+        return ring.size();
+    }
 
     // -------------------------------------------------------------------------
     // Hashing
@@ -156,7 +168,6 @@ public class ConsistentHashRing {
     private class RingIterator implements Iterator<Node> {
         private final Iterator<Map.Entry<Long, Node>> tail;
         private final Iterator<Map.Entry<Long, Node>> head;
-        private boolean headDone = false;
         private int emitted = 0;
 
         RingIterator(long startHash) {
@@ -165,13 +176,16 @@ public class ConsistentHashRing {
             this.head = ring.headMap(startHash).entrySet().iterator();
         }
 
-        @Override public boolean hasNext() {
+        @Override
+        public boolean hasNext() {
             return emitted < ring.size() && (tail.hasNext() || head.hasNext());
         }
 
-        @Override public Node next() {
+        @Override
+        public Node next() {
             emitted++;
-            if (tail.hasNext()) return tail.next().getValue();
+            if (tail.hasNext())
+                return tail.next().getValue();
             return head.next().getValue();
         }
     }
