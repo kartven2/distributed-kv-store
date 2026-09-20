@@ -119,6 +119,11 @@ public class ConsistentHashRing {
     /** Returns all physical nodes registered in the ring. */
     public List<Node> allNodes() { return Collections.unmodifiableList(nodes); }
 
+    /** Returns {@code true} if a node with the given ID is already in the ring. */
+    public boolean containsNode(String nodeId) {
+        return nodes.stream().anyMatch(n -> n.getId().equals(nodeId));
+    }
+
     /** Returns the number of virtual points currently in the ring. */
     public int ringSize() { return ring.size(); }
 

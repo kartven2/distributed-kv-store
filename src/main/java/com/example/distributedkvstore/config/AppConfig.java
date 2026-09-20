@@ -26,16 +26,26 @@ public class AppConfig {
 
     private static final Logger log = LoggerFactory.getLogger(AppConfig.class);
 
-    @Value("${kv.node.id:}")      private String nodeId;
     @Value("${kv.node.host:localhost}") private String nodeHost;
     @Value("${kv.node.port:8080}") private int nodePort;
 
     /** Comma-separated seed peers: {@code host:port,host:port} */
     @Value("${kv.cluster.seeds:}") private String seedList;
 
+    /**
+     * Computes a deterministic node ID from a host:port address.
+     *
+     * <p>Using a Type-3 (name-based) UUID means every node independently
+     * computes the <em>same</em> ID for the same address — no coordination
+     * or configuration needed, and no ID drift possible.
+     */
+    public static String nodeIdFor(String host, int port) {
+        return UUID.nameUUIDFromBytes((host + ":" + port).getBytes()).toString();
+    }
+
     @Bean
     public Node selfNode() {
-        String id = (nodeId == null || nodeId.isBlank()) ? UUID.randomUUID().toString() : nodeId;
+        String id = nodeIdFor(nodeHost, nodePort);
         Node self = new Node(id, nodeHost, nodePort);
         log.info("Self node: {}", self);
         return self;
@@ -46,7 +56,13 @@ public class AppConfig {
         return new RestTemplate();
     }
 
-    /** Registers this node + seed peers into the ring, then starts gossip. */
+    /**
+     * Registers this node + seed peers into the ring, then starts gossip.
+     *
+     * <p>Seed peer IDs are computed with the same {@link #nodeIdFor} formula,
+     * so they match the ID each peer assigns to itself — no placeholder IDs,
+     * no drift, no gossip-based identity correction needed.
+     */
     @Bean
     public Void clusterBootstrap(ConsistentHashRing ring, Node selfNode, GossipFailureDetector gossip) {
         ring.addNode(selfNode);
@@ -57,10 +73,11 @@ public class AppConfig {
                 String[] parts = seed.split(":");
                 if (parts.length != 2) { log.warn("Skipping bad seed: '{}'", seed); continue; }
                 try {
-                    String peerId = UUID.nameUUIDFromBytes(seed.getBytes()).toString();
-                    Node peer = new Node(peerId, parts[0], Integer.parseInt(parts[1]));
-                    ring.addNode(peer);
-                    log.info("Registered seed peer: {}", peer);
+                    String host = parts[0];
+                    int    port = Integer.parseInt(parts[1]);
+                    String id   = nodeIdFor(host, port); // same formula the peer uses for itself
+                    ring.addNode(new Node(id, host, port));
+                    log.info("Registered seed peer: {}:{} (id={})", host, port, id);
                 } catch (NumberFormatException e) {
                     log.warn("Skipping seed '{}' — invalid port", seed);
                 }

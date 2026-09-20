@@ -14,20 +14,52 @@ import java.util.concurrent.*;
  *
  * <p>Every {@link #intervalMs} milliseconds this node:
  * <ol>
- *   <li>Increments its own heartbeat timestamp in the shared state table.</li>
+ *   <li>Updates its own entry in the gossip state table.</li>
  *   <li>Randomly selects {@link #fanout} peers and sends them the full state table
  *       via {@code POST /internal/gossip}.</li>
  *   <li>Marks any node whose heartbeat has not been updated within
  *       {@link #timeoutMs} as <em>dead</em> in the {@link ConsistentHashRing}.</li>
  * </ol>
  *
- * <p>This achieves O(log N) convergence time for failure propagation across a cluster
- * of N nodes, with no single point of failure.
+ * <h2>Gossip message format</h2>
+ * Each entry in the table is a {@link NodeState} carrying the node's self-reported
+ * {@code id}, {@code host}, {@code port}, and {@code heartbeatMs}. This means peers
+ * <em>never</em> derive a node ID from its address — they always use the ID the
+ * node itself advertised, preventing ID drift.
  */
 @Component
 public class GossipFailureDetector {
 
     private static final Logger log = LoggerFactory.getLogger(GossipFailureDetector.class);
+
+    // -------------------------------------------------------------------------
+    // NodeState — the unit of gossip exchange
+    // -------------------------------------------------------------------------
+
+    /**
+     * Full node identity + heartbeat timestamp, exchanged in every gossip round.
+     *
+     * <p>Using a record that carries {@code id}, {@code host}, and {@code port}
+     * means the receiving node can register a peer in the ring using the peer's
+     * <em>own</em> self-reported ID — not one derived from its address.
+     */
+    public record NodeState(String id, String host, int port, long heartbeatMs) {
+
+        /** Creates a state snapshot for a live node at the current time. */
+        public static NodeState of(Node node) {
+            return new NodeState(node.getId(), node.getHost(), node.getPort(),
+                    System.currentTimeMillis());
+        }
+
+        /** Returns the max heartbeat between this and another state for the same node. */
+        public NodeState merge(NodeState other) {
+            return this.heartbeatMs >= other.heartbeatMs ? this : other;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Fields
+    // -------------------------------------------------------------------------
 
     private final ConsistentHashRing ring;
     private final Node selfNode;
@@ -38,8 +70,8 @@ public class GossipFailureDetector {
     private final long timeoutMs;
     private final int fanout;
 
-    /** Shared gossip state: nodeId → last known heartbeat epoch-ms. */
-    private final ConcurrentHashMap<String, Long> heartbeatTable = new ConcurrentHashMap<>();
+    /** Gossip state table: nodeId → NodeState (id + host + port + heartbeat). */
+    private final ConcurrentHashMap<String, NodeState> stateTable = new ConcurrentHashMap<>();
 
     // -------------------------------------------------------------------------
     // Construction
@@ -86,16 +118,40 @@ public class GossipFailureDetector {
     // Gossip protocol
     // -------------------------------------------------------------------------
 
-    /** Called by peers posting their state via {@code POST /internal/gossip}. */
-    public void mergeState(Map<String, Long> remoteTable) {
-        remoteTable.forEach((nodeId, ts) ->
-                heartbeatTable.merge(nodeId, ts, Math::max));
+    /**
+     * Merges a remote gossip state table received from a peer.
+     *
+     * <p>For each entry in the remote table:
+     * <ul>
+     *   <li>Keep the entry with the higher heartbeat timestamp.</li>
+     *   <li>If this is a node we haven't seen before, register it in the ring
+     *       using its <em>self-reported</em> ID — no ID derivation from address.</li>
+     * </ul>
+     *
+     * <p>Called by {@link com.example.distributedkvstore.api.NodeController}
+     * when a peer posts to {@code POST /internal/gossip}.
+     */
+    public void mergeState(Map<String, NodeState> remoteTable) {
+        for (Map.Entry<String, NodeState> entry : remoteTable.entrySet()) {
+            String nodeId = entry.getKey();
+            NodeState remote = entry.getValue();
+
+            // Merge: keep the newer heartbeat
+            stateTable.merge(nodeId, remote, NodeState::merge);
+
+            // If this is a brand-new node, add it to the ring using its own ID
+            if (!ring.containsNode(nodeId) && !nodeId.equals(selfNode.getId())) {
+                Node discovered = new Node(remote.id(), remote.host(), remote.port());
+                ring.addNode(discovered);
+                log.info("Discovered new node via gossip: {}", discovered);
+            }
+        }
         updateAliveFlags();
     }
 
-    /** Returns the current heartbeat table (sent to peers during gossip). */
-    public Map<String, Long> getHeartbeatTable() {
-        return Collections.unmodifiableMap(heartbeatTable);
+    /** Returns the current gossip state table (sent to peers). */
+    public Map<String, NodeState> getStateTable() {
+        return Collections.unmodifiableMap(stateTable);
     }
 
     // -------------------------------------------------------------------------
@@ -104,12 +160,12 @@ public class GossipFailureDetector {
 
     private void gossipRound() {
         try {
-            // Step 1: update own heartbeat
-            heartbeatTable.put(selfNode.getId(), System.currentTimeMillis());
+            // Step 1: update own state
+            stateTable.put(selfNode.getId(), NodeState.of(selfNode));
 
-            // Step 2: fan out to random peers
+            // Step 2: fan out to random alive peers
             List<Node> peers = pickRandomPeers();
-            Map<String, Long> snapshot = new HashMap<>(heartbeatTable);
+            Map<String, NodeState> snapshot = new HashMap<>(stateTable);
             for (Node peer : peers) {
                 try {
                     restTemplate.postForObject(
@@ -130,7 +186,8 @@ public class GossipFailureDetector {
         long now = System.currentTimeMillis();
         for (Node node : ring.allNodes()) {
             if (node.getId().equals(selfNode.getId())) continue;
-            long lastSeen = heartbeatTable.getOrDefault(node.getId(), 0L);
+            NodeState state = stateTable.get(node.getId());
+            long lastSeen = (state != null) ? state.heartbeatMs() : 0L;
             boolean shouldBeAlive = (now - lastSeen) <= timeoutMs;
             if (node.isAlive() != shouldBeAlive) {
                 node.setAlive(shouldBeAlive);

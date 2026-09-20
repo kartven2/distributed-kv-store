@@ -57,9 +57,10 @@ public class NodeController {
                 .orElseGet(() -> ResponseEntity.notFound().<Map<String, Object>>build());
     }
 
-    /** Receives and merges a gossip heartbeat table from a peer. */
+    /** Receives and merges a gossip state table from a peer. */
     @PostMapping("/gossip")
-    public ResponseEntity<Void> gossip(@RequestBody Map<String, Long> table) {
+    public ResponseEntity<Void> gossip(
+            @RequestBody Map<String, GossipFailureDetector.NodeState> table) {
         gossip.mergeState(table);
         return ResponseEntity.ok().build();
     }
